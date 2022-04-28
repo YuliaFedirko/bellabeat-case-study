@@ -1,0 +1,437 @@
+---
+title: "How Can a Wellness Technology Company Play It Smart"
+author: "Yuliia Fedirko"
+date: "28.04.2022"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github 
+---
+
+# About case-study
+
+**Bellabeat** is well-being company with smart devices for women. Company is interested to gain insight into how people are already using their smart devices.
+
+**Structure of report:**
+
+[1.A clear summary of the business task]
+
+[2.A description of all data sources used]
+
+[3.Documentation of any cleaning or manipulation of data]
+
+[4.A summary of analysis]
+
+[5.Key findings]
+
+[6.High-level recommendations based on analysis]
+
+------------------------------------------------------------------------
+
+#### 1.A clear summary of the business task
+
+1.  What are some trends in smart device usage?
+2.  How could these trends apply to Bellabeat customers?
+3.  How could these trends help influence Bellabeat marketing strategy?
+
+------------------------------------------------------------------------
+
+#### 2.A description of all data sources used
+
+In our study we use open-source data from [FitBit Fitness Tracker Data](https://www.kaggle.com/datasets/arashnic/fitbit). It contains 18 csv files. Data collected from 30 participants, including steps, calories burned, sleep and weight data. A good data source is ROCCC which stands for Reliable, Original, Comprehensive, Current, and Cited. This data source is third-party, so it definitely can\`t be reliable totally, also it consists of only thirty participants, which is small sample size to reproduce on all users, information is not current, as it is data from 03.12.2016-05.12.2016. The data was collected from a distributed survey via Amazon Mechanical Turk.
+
+But since the data is confidential, and we have no resources to collect our own, we will use them, but be aware of the shortcomings.
+
+#### 3.Documentation of any cleaning or manipulation of data
+
+```{r load packages, echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+#load packages
+
+library(tidyverse)
+library(readr)
+library(dplyr)
+library(lubridate)
+library(skimr)
+library(janitor)
+library(cluster)
+library(scales)
+
+#set local settings
+Sys.setlocale("LC_ALL","English")
+
+```
+
+After investigating csv files, we decided to use dailyActivity table as it includes information about steps, calories and intensities; also it\`s important to check hourly data about this parameters and sleep. We decided not to use weight data as it contains only 8 distinct values.
+
+```{r load data, echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+#load data from csv file into dataframe
+daily_activity <- read_csv("./fitbit_fitness_tracker_data/dailyActivity_merged.csv")
+hourly_calories <- read_csv("./fitbit_fitness_tracker_data/hourlyCalories_merged.csv")
+hourly_intensities <- read_csv("./fitbit_fitness_tracker_data/hourlyIntensities_merged.csv")
+hourly_steps <- read_csv("./fitbit_fitness_tracker_data/hourlySteps_merged.csv")
+sleep_day <- read_csv("./fitbit_fitness_tracker_data/sleepDay_merged.csv")
+
+```
+
+```{r}
+#inspecting data
+glimpse(daily_activity)
+glimpse(hourly_calories)
+glimpse(hourly_intensities)
+glimpse(hourly_steps)
+glimpse(sleep_day)
+
+```
+
+All dataframe has id, lets check unique participant and date in each table.
+
+```{r}
+attribute <- c("aily_activity$Id", "hourly_calories$Id","hourly_calories$ActivityHour","hourly_intensities$Id",
+"hourly_intensities$ActivityHour","hourly_steps$Id","hourly_steps$ActivityHour",
+"sleep_day$Id")
+
+distinct_count <- c(n_distinct(daily_activity$Id),
+n_distinct(hourly_calories$Id),
+n_distinct(hourly_calories$ActivityHour),
+n_distinct(hourly_intensities$Id),
+n_distinct(hourly_intensities$ActivityHour),
+n_distinct(hourly_steps$Id),
+n_distinct(hourly_steps$ActivityHour),
+n_distinct(sleep_day$Id))
+
+data.frame(attribute, distinct_count)
+```
+
+As we see we have: 33 unique participants in the steps, calories and intensities datasets. 24 unique participants in the sleep dataset.
+
+We will divide our research into three logical groups - daily activity, hourly and sleep data. We will merge data from sleep and total activity together. And we will merge hourly data based on id and datetime value.
+
+But before we should do cleaning:
+
+1.  check for duplicates
+2.  check for nulls
+3.  check for appropriate column names
+4.  check for types (char to datetime/date)
+
+```{r cleaning.column}
+#clean column names
+daily_activity <- clean_names(daily_activity)
+hourly_intensities <- clean_names(hourly_intensities)
+hourly_calories <- clean_names(hourly_calories)
+hourly_steps <- clean_names(hourly_steps)
+sleep_day <- clean_names(sleep_day)
+
+```
+
+```{r cleaning.duplicates}
+#check for duplicates
+attributes <- c(
+"daily_activity",
+"hourly_intensities",
+"hourly_calories",
+"hourly_steps",
+"sleep_day")
+
+before <- c(
+sum(duplicated(daily_activity)),
+sum(duplicated(hourly_intensities)),
+sum(duplicated(hourly_calories)),
+sum(duplicated(hourly_steps)),
+sum(duplicated(sleep_day)))
+
+#remove duplicates
+sleep_day <- unique(sleep_day)
+
+after <- c(
+sum(duplicated(daily_activity)),
+sum(duplicated(hourly_intensities)),
+sum(duplicated(hourly_calories)),
+sum(duplicated(hourly_steps)),
+sum(duplicated(sleep_day)))
+
+data.frame(attributes, before,after)
+
+```
+
+As sleep data has duplicates, we deleted them.
+
+```{r cleaning.na}
+#check for NA-values
+sum(is.na(daily_activity))
+sum(is.na(hourly_intensities))
+sum(is.na(hourly_calories))
+sum(is.na(hourly_steps))
+sum(is.na(sleep_day))
+```
+
+Thats great, we dont have nulls.
+
+```{r cleaning.date}
+daily_activity$activity_date <- mdy(daily_activity$activity_date)
+sleep_day$sleep_day <- as_date(mdy_hms(sleep_day$sleep_day))
+
+
+hourly_steps$activity_hour <- mdy_hms(hourly_steps$activity_hour)
+hourly_calories$activity_hour  <- mdy_hms(hourly_calories$activity_hour)
+hourly_intensities$activity_hour  <- mdy_hms(hourly_intensities$activity_hour)
+
+#check valid type
+glimpse(hourly_intensities)
+```
+
+```{r rename}
+#rename column
+sleep_day <- rename(sleep_day, activity_date = sleep_day)
+
+```
+
+```{r merge}
+#merge day data
+day_merged <- merge(daily_activity, sleep_day, by = c("id",  "activity_date"))
+glimpse(day_merged)
+
+#merge hourly data
+
+hour_merged <- merge(hourly_calories, hourly_intensities, by = c("id",  "activity_hour")) %>% 
+  merge(hourly_steps, by = c("id",  "activity_hour"))
+glimpse(hour_merged)
+```
+
+Data seems to be clean and reliable so lets move further to analysis.
+
+#### 4.A summary of analysis
+
+I have a hypotheses that we can divide participants into groups. We could use our metrics or clustering methods. I prefer second option, as that can lead to more detailed marketing program.
+
+```{r}
+#using K-means to divide participants into groups with parameters total_steps, calories
+cluster <- day_merged %>% 
+  select(total_steps,calories)
+#k-means 3 group
+model=kmeans(cluster,3)
+
+#plot of clusters
+clusplot(cluster,model$cluster,color=T,shade=T)
+
+#mean of cluster groups
+model$centers
+
+```
+
+Findings:
+
+-   There are three groups: active, average and low activity.
+-   With an increase in the number of steps, the increase in calories burned decreases. (depends on activity? needs further research)
+
+So we can divide our participants into three group based on activity an calories:
+
+```{r}
+#labeling participants
+day_merged <- day_merged %>% 
+  mutate(group = model$cluster) %>% 
+  mutate(user_type = case_when(
+    group == 1 ~ 'low',
+    group == 2 ~ 'average',
+    group == 3 ~ 'active',
+  ))
+  
+```
+
+```{r}
+tabyl(day_merged,user_type)
+```
+
+```{r}
+ggplot(tabyl(day_merged,user_type), aes(x="", y=n, fill=user_type))+
+  geom_bar(width = 1, stat = "identity")+
+  coord_polar("y", start=0)+
+  theme(axis.text.x=element_blank())+
+  scale_fill_manual(values=c("#FF7F50", "#DDA0DD", "#F5DEB3"))+
+  ggtitle("User Type Pie Chart")+
+  labs(fill='User Type')+
+  theme_void()
+  
+```
+
+As we observe, the biggest group is average and low activity users, high activity have only 22%.
+
+Well make exploratory analysis using plots. Is like to check some day and day trends in activity. For that I find day part in date.
+
+```{r define date parts}
+
+#add day
+day_merged <- day_merged %>% 
+  mutate(day = wday(activity_date, label=TRUE))
+
+#add day and hour
+hour_merged <- hour_merged %>% 
+  mutate(day = wday(activity_hour, label=TRUE)) %>% 
+  mutate(hour = hour(activity_hour))
+```
+
+```{r}
+#aggregation daily
+mean_step_day <- aggregate(total_steps~day+user_type, day_merged, mean)
+mean_dist_day <- aggregate(total_distance~day+user_type, day_merged, mean)
+mean_sleep_day <- aggregate(total_minutes_asleep~day+user_type, day_merged, mean)
+mean_cal_day <- aggregate(calories~day+user_type, day_merged, mean)
+
+#aggregation hourly
+mean_step_hour <- aggregate(step_total~hour, hour_merged, mean)
+mean_cal_hour <- aggregate(calories~hour, hour_merged, mean)
+
+```
+
+After calculation lets visualize this stats.
+
+```{r}
+p1<-ggplot(data = mean_step_day, mapping = aes(x = day, y = total_steps,  fill=user_type)) +
+  geom_bar(alpha = 1, stat="identity",position=position_dodge())+
+  theme_minimal()+
+  ggtitle("Average Steps per Day by User Activity Type")+
+  labs(fill='User Type')+
+  labs(x = "Day", y = "Total steps")
+
+p1+scale_fill_manual(values=c("#FF7F50", "#DDA0DD", "#F5DEB3"))
+
+```
+
+Activity cycles of users of different classes are the same, the most active days are Tuesday, Thursday and weekends. This may be due to the fact that on weekends people go for a walk, and on weekdays they have standard activity as part of a transfer to work.
+
+Tip
+
+:   more notification on work days to bust activity
+
+```{r}
+p2<-ggplot(data = mean_cal_day, mapping = aes(x = day, y = calories,  fill=user_type)) +
+  geom_bar(alpha = 1, stat="identity",position=position_dodge())+
+  theme_minimal()+
+  ggtitle("Average Calories per Day by User Activity Type")+
+  labs(fill='User Type')+
+  labs(x = "Day", y = "Calories")
+
+p2+scale_fill_manual(values=c("#FF7F50", "#DDA0DD", "#F5DEB3"))
+
+```
+
+```{r}
+p3<-ggplot(data = mean_sleep_day, mapping = aes(x = day, y = total_minutes_asleep,  fill=user_type)) +
+  geom_bar(alpha = 1, stat="identity",position=position_dodge())+
+  theme_minimal()+
+  ggtitle("Average Sleep per Day by User Type")+
+  labs(fill='User Type')+
+  labs(x = "Day", y = "Sleep Minutes")
+
+p3+scale_fill_manual(values=c("#FF7F50", "#DDA0DD", "#F5DEB3"))
+```
+
+We can clearly see that active people need less sleep than inactive people.
+
+Tip
+
+:   build the challenge for a week to go to bed on alarms and walk at least 9000 steps and evaluate the relationship
+
+```{r}
+p4<-ggplot(data = mean_cal_hour, mapping = aes(x = as.factor(hour), y = calories, group = 1)) +
+  geom_line(col ="#FF7F50", size = .5, linetype = "solid" )+
+  theme_minimal()+
+  ggtitle("Average Calories per Hour")+
+  labs(x = "Hour", y = "Calories")
+
+p4
+```
+
+The greatest activity is observed in the morning and evening, with a fall during lunch. The cycle is pretty obvious.
+
+Tip
+
+:   smart notification in the morning and in the evening - not to use transport, also in the luncn time use notification to go to the park.
+
+```{r}
+#check correlation
+p5 <- ggplot(day_merged, aes(y=calories, x=total_steps, color = user_type)) +
+  geom_point(alpha = 0.5)+
+  theme_minimal()+
+  ggtitle("Calories vs Total Steps")+
+  labs(color='User Type')+
+  labs(x = "Total Steps", y = "Calories")+
+  stat_ellipse()
+
+
+p5 + scale_color_manual(values=c("#FF7F50", "#DDA0DD", "#F5DEB3"))
+  
+```
+
+We see that active users spend calories by walking more than the norm, however, users with average activity spend same calories by walking the norm of steps.
+
+Tip
+
+:   inspirational advert to provide that it is enough to be only average to be healthy to bust our low activity users
+
+```{r}
+#check correlation
+p6 <- ggplot(day_merged, aes(y=calories, x=total_minutes_asleep/60, color = user_type)) +
+  geom_point(alpha = 0.5, size = 3)+
+  theme_minimal()+
+  ggtitle("Calories vs Sleep")+
+  labs(color='User Type')+
+  labs(x = "Sleep Hour", y = "Calories")+
+  stat_ellipse()
+  
+
+
+p6 + scale_color_manual(values=c("#FF7F50", "#DDA0DD", "#F5DEB3"))
+```
+
+There is a connection between activity and sleep, but it is not obvious in such a small sample.
+
+```{r}
+#daily step by user type
+p7<-ggplot(data = day_merged, mapping = aes(x = user_type, y = total_steps, color = user_type)) +
+  geom_boxplot(alpha = 0.5)+
+  theme_minimal()+
+  ggtitle("Steps by User Type")+
+  labs(fill='User Type')+
+  labs(x = "User Type", y = "Total steps")
+
+p7+scale_color_manual(values=c("#FF7F50", "#DDA0DD", "#F5DEB3"))
+```
+
+```{r}
+#daily step by user type
+p8<-ggplot(data = day_merged, mapping = aes(x = user_type, y = calories, color = user_type)) +
+  geom_boxplot(alpha = 0.5)+
+  theme_minimal()+
+  ggtitle("Calories by User Type")+
+  labs(fill='User Type')+
+  labs(x = "User Type", y = "Total steps")
+
+p8+scale_color_manual(values=c("#FF7F50", "#DDA0DD", "#F5DEB3"))
+```
+
+```{r}
+#daily sleep by user type
+p9<-ggplot(data = day_merged, mapping = aes(x = user_type, y = total_minutes_asleep/60, color = user_type)) +
+  geom_boxplot(alpha = 0.5)+
+  theme_minimal()+
+  ggtitle("Sleep by User Type")+
+  labs(fill='User Type')+
+  labs(x = "User Type", y = "Hour sleep")
+
+p9+scale_color_manual(values=c("#FF7F50", "#DDA0DD", "#F5DEB3"))
+```
+
+#### 5.Key findings
+
+-   There are three groups: active, average and low activity. The biggest group is average and low activity users, high activity have only 22%
+-   Activity cycles of users of different classes are the same, the most active days are Tuesday, Thursday and weekends. Greatest activity is observed in the morning and evening, with a fall during lunch. The cycle is pretty obvious.
+-   Active users spend calories by walking more than the norm, however, users with average activity spend same calories by walking the norm of steps. With an increase in the number of steps, the increase in calories burned decreases. (depends on activity? needs further research)
+-   Active people need less sleep than inactive people.
+
+#### 6.High-level recommendations based on analysis
+
+-   Inspirational advert to provide that it is enough to be only average to be healthy to bust our low activity users
+-   Smart notification in the morning and in the evening - not to use transport, also in the luncn time use
+    notification to go to the park.
+-   Build the challenge for a week to go to bed on alarms and walk at least 9000 steps and evaluate the relationship
+-   More notification on work days to bust activity
